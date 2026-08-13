@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go run *)",
+      "Read(//c/Users/Рустам/AppData/Local/Temp/claude/c--Users--------Project-amundsen-playroom-bot/66ecb3fd-572d-4fc6-ae92-d9ba1337361b/scratchpad/goroutines-demo/**)",
+      "Bash(mkdir -p \"/c/Users/F55F~1/AppData/Local/Temp/claude/c--Users--------Project-amundsen-playroom-bot/66ecb3fd-572d-4fc6-ae92-d9ba1337361b/scratchpad/visibility-demo/demo\" \"/c/Users/F55F~1/AppData/Local/Temp/claude/c--Users--------Project-amundsen-playroom-bot/66ecb3fd-572d-4fc6-ae92-d9ba1337361b/scratchpad/visibility-demo/consumer\")",
+      "Bash(find \"/c/Users/Рустам/go/pkg/mod/github.com/joho\" -maxdepth 1 2>/dev/null)",
+      "Read(//c/Users/Рустам/go/pkg/mod/github.com/joho/**)",
+      "Read(//c/Users/Рустам/go/pkg/mod/github.com/joho/godotenv@v1.5.1/**)",
+      "Bash(go vet *)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\F55F~1\\AppData\\Local\\Temp\\claude\\c--Users--------Project-amundsen-playroom-bot\\66ecb3fd-572d-4fc6-ae92-d9ba1337361b\\scratchpad\\visibility-demo"
+    ]
+  }
+}

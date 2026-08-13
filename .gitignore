@@ -1,0 +1,6 @@
+.env
+*.db
+/bin/
+*.exe
+.claude/settings.local.json
+учёба.md
