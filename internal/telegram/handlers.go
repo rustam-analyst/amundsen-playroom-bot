@@ -14,20 +14,27 @@ import (
 	"playroom-bot/internal/domain"
 )
 
-// availabilityWindow - на сколько вперёд от текущего момента показывать
-// занятость по команде /free.
+// availabilityDays - сколько календарных дней показывать в /free, начиная с сегодня.
+// Часы сетки берутся из booking.BusinessHoursStart/BusinessHoursEnd - тех же
+// границ, в которые service.Book реально разрешает бронировать, чтобы сетка
+// никогда не показывала как "свободно" то, что на самом деле забронировать нельзя.
 // TODO: пагинация - команда/кнопка "следующая неделя", чтобы смотреть дальше
 // одного фиксированного окна.
-const availabilityWindow = 7 * 24 * time.Hour
+const availabilityDays = 7
+
+var weekdayNames = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"} // порядок совпадает с time.Weekday (0 = Вс)
 
 // handleStart отвечает на /start и /help кратким описанием бота.
 func handleStart(ctx context.Context, bot *Bot, msg *tgbotapi.Message) error {
-	text := "Привет! Я бот для брони игровой комнаты в атриуме 4й секции ЖК Амундсен.\n\n" +
-		"Команды:\n" +
-		"/book - забронировать слот\n" +
-		"/my - мои брони\n" +
-		"/cancel - отменить бронь\n" +
-		"/free - проверить свободное время"
+	text := fmt.Sprintf(
+		"Привет! Я бот для брони игровой комнаты в атриуме 4й секции ЖК Амундсен.\n"+
+			"Комнату можно бронировать с %02d:00 до %02d:00.\n\n"+
+			"Команды:\n"+
+			"/book - забронировать слот\n"+
+			"/my - мои брони\n"+
+			"/cancel - отменить бронь (в любое время)\n"+
+			"/free - проверить свободное время",
+		booking.BusinessHoursStart, booking.BusinessHoursEnd)
 	return bot.Send(msg.Chat.ID, text)
 }
 
@@ -36,7 +43,8 @@ func handleBook(ctx context.Context, bot *Bot, msg *tgbotapi.Message) error {
 	// TODO: когда появится бронирование отдельных элементов комнаты
 	// (PS_0, PS_1, kicker, movie, ...), сюда добавится ещё один аргумент -
 	// тип брони; см. также TODO в sqlite.go про колонку resource.
-	const usage = "формат: /book ДД.ММ ЧЧ:ММ часы\nнапример: /book 10.08 14:00 2"
+	usage := fmt.Sprintf("формат: /book ДД.ММ ЧЧ:ММ часы (с %02d:00 до %02d:00)\nнапример: /book 10.08 14:00 2",
+		booking.BusinessHoursStart, booking.BusinessHoursEnd)
 
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) != 3 {
@@ -97,6 +105,8 @@ func bookingErrorText(err error) string {
 		return "нельзя бронировать прошедшее время"
 	case errors.Is(err, booking.ErrInvalidDuration):
 		return fmt.Sprintf("длительность брони должна быть от %s до %s", booking.MinSlotDuration, booking.MaxSlotDuration)
+	case errors.Is(err, booking.ErrOutsideBusinessHours):
+		return fmt.Sprintf("бронировать можно только с %02d:00 до %02d:00", booking.BusinessHoursStart, booking.BusinessHoursEnd)
 	case errors.Is(err, booking.ErrSlotTaken):
 		return "это время уже занято, проверьте /free"
 	default:
@@ -158,29 +168,62 @@ func cancelErrorText(err error) string {
 	}
 }
 
-// handleAvailability показывает занятые интервалы без указания владельца.
+// handleAvailability показывает занятость сеткой по часам, без указания владельца.
 func handleAvailability(ctx context.Context, bot *Bot, msg *tgbotapi.Message) error {
-	from := time.Now()
-	to := from.Add(availabilityWindow)
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	to := today.AddDate(0, 0, availabilityDays)
 
-	slots, err := bot.service.Availability(ctx, from, to)
+	slots, err := bot.service.Availability(ctx, today, to)
 	if err != nil {
 		return err
 	}
 
-	return bot.Send(msg.Chat.ID, formatBusySlots(slots))
+	return bot.Send(msg.Chat.ID, formatAvailabilityGrid(today, now, slots))
 }
 
-// formatBusySlots превращает список занятых интервалов в текст сообщения.
-func formatBusySlots(slots []domain.Slot) string {
-	if len(slots) == 0 {
-		return "Свободно на ближайшую неделю!"
+// formatAvailabilityGrid рисует занятость сеткой: одна строка на день, один
+// символ на час в диапазоне [booking.BusinessHoursStart, booking.BusinessHoursEnd).
+// today - начало периода (00:00 текущего дня), now - момент вызова (чтобы
+// отличить "уже прошло" от "ещё можно забронировать").
+func formatAvailabilityGrid(today, now time.Time, slots []domain.Slot) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Занятость на %d дней (%02d:00–%02d:00)\n", availabilityDays, booking.BusinessHoursStart, booking.BusinessHoursEnd)
+	b.WriteString("🟩 свободно  🟥 занято  ⬛ прошло\n\n")
+
+	for d := range availabilityDays {
+		day := today.AddDate(0, 0, d)
+		// Дата и квадратики - на РАЗНЫХ строках: в обычном (не моноширинном)
+		// тексте Telegram метки разной ширины ("Чт" уже "Пт" и т.п.) иначе
+		// сдвигают квадратики друг относительно друга. На отдельной строке
+		// ряд квадратиков всегда начинается с чистого начала строки и не
+		// зависит от того, что было в предыдущей строке.
+		fmt.Fprintf(&b, "%s %s\n", day.Format("02.01"), weekdayNames[day.Weekday()])
+		for h := booking.BusinessHoursStart; h < booking.BusinessHoursEnd; h++ {
+			cellStart := time.Date(day.Year(), day.Month(), day.Day(), h, 0, 0, 0, day.Location())
+			cellEnd := cellStart.Add(time.Hour)
+			switch {
+			case !cellEnd.After(now):
+				b.WriteString("⬛")
+			case hourIsBusy(cellStart, cellEnd, slots):
+				b.WriteString("🟥")
+			default:
+				b.WriteString("🟩")
+			}
+		}
+		b.WriteString("\n\n") // пустая строка между днями
 	}
 
-	var b strings.Builder
-	b.WriteString("Занято на ближайшую неделю:\n")
-	for _, slot := range slots {
-		fmt.Fprintf(&b, "%s – %s\n", slot.StartTime.Format("02.01 15:04"), slot.EndTime.Format("02.01 15:04"))
+	return strings.TrimRight(b.String(), "\n") // без лишней пустой строки в самом конце
+}
+
+// hourIsBusy проверяет, пересекается ли часовой интервал [start, end) хотя
+// бы с одним занятым слотом.
+func hourIsBusy(start, end time.Time, slots []domain.Slot) bool {
+	for _, s := range slots {
+		if start.Before(s.EndTime) && s.StartTime.Before(end) {
+			return true
+		}
 	}
-	return b.String()
+	return false
 }

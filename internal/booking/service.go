@@ -14,10 +14,19 @@ const (
 	MaxSlotDuration = 5 * time.Hour
 )
 
+// Часы работы комнаты: бронировать можно только внутри [BusinessHoursStart,
+// BusinessHoursEnd). Используются и здесь для валидации, и в telegram-пакете
+// для границ сетки /free - единственный источник правды на оба места.
+const (
+	BusinessHoursStart = 9  // 09:00
+	BusinessHoursEnd   = 23 // 23:00
+)
+
 var (
-	ErrInvalidDuration = errors.New("booking: слот должен быть от 1 до 5 часов")
-	ErrSlotTaken       = errors.New("booking: время уже занято")
-	ErrPastTime        = errors.New("booking: нельзя бронировать прошедшее время")
+	ErrInvalidDuration      = errors.New("booking: слот должен быть от 1 до 5 часов")
+	ErrSlotTaken            = errors.New("booking: время уже занято")
+	ErrPastTime             = errors.New("booking: нельзя бронировать прошедшее время")
+	ErrOutsideBusinessHours = errors.New("booking: бронировать можно только с 9:00 до 23:00")
 )
 
 // Service - бизнес-логика бронирования: валидация длительности слота,
@@ -56,6 +65,13 @@ func (svc *service) Book(ctx context.Context, userID int64, userName string, sta
 	duration := end.Sub(start)
 	if duration < MinSlotDuration || duration > MaxSlotDuration {
 		return domain.Booking{}, ErrInvalidDuration
+	}
+
+	dayStart := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	businessStart := dayStart.Add(BusinessHoursStart * time.Hour)
+	businessEnd := dayStart.Add(BusinessHoursEnd * time.Hour)
+	if start.Before(businessStart) || end.After(businessEnd) {
+		return domain.Booking{}, ErrOutsideBusinessHours
 	}
 
 	busy, err := svc.repo.ListBusySlots(ctx, start, end)
