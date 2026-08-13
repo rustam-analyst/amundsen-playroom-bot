@@ -22,11 +22,17 @@ const (
 	BusinessHoursEnd   = 23 // 23:00
 )
 
+// MaxBookingsPerWeek - сколько активных броней может быть у одного
+// пользователя в одну календарную неделю (Пн-Вс), независимо от их
+// длительности. Неделя считается по дате СТАРТА новой брони, а не по "сейчас".
+const MaxBookingsPerWeek = 3
+
 var (
 	ErrInvalidDuration      = errors.New("booking: слот должен быть от 1 до 5 часов")
 	ErrSlotTaken            = errors.New("booking: время уже занято")
 	ErrPastTime             = errors.New("booking: нельзя бронировать прошедшее время")
 	ErrOutsideBusinessHours = errors.New("booking: бронировать можно только с 9:00 до 23:00")
+	ErrWeeklyLimitReached   = errors.New("booking: не больше 3 броней в неделю")
 )
 
 // Service - бизнес-логика бронирования: валидация длительности слота,
@@ -74,6 +80,21 @@ func (svc *service) Book(ctx context.Context, userID int64, userName string, sta
 		return domain.Booking{}, ErrOutsideBusinessHours
 	}
 
+	existing, err := svc.repo.ListByUser(ctx, userID)
+	if err != nil {
+		return domain.Booking{}, err
+	}
+	weekStart, weekEnd := weekBounds(start)
+	weekCount := 0
+	for _, bk := range existing {
+		if !bk.StartTime.Before(weekStart) && bk.StartTime.Before(weekEnd) {
+			weekCount++
+		}
+	}
+	if weekCount >= MaxBookingsPerWeek {
+		return domain.Booking{}, ErrWeeklyLimitReached
+	}
+
 	busy, err := svc.repo.ListBusySlots(ctx, start, end)
 	if err != nil {
 		return domain.Booking{}, err
@@ -111,4 +132,21 @@ func (svc *service) MyBookings(ctx context.Context, userID int64) ([]domain.Book
 
 func (svc *service) Availability(ctx context.Context, from, to time.Time) ([]domain.Slot, error) {
 	return svc.repo.ListBusySlots(ctx, from, to)
+}
+
+// weekBounds возвращает [start, end) календарной недели (Пн 00:00 - следующий
+// Пн 00:00), содержащей t. time.Weekday нумерует дни с воскресенья (0), поэтому
+// воскресенье отдельно приводится к "7", чтобы не оказаться "перед" понедельником.
+func weekBounds(t time.Time) (start, end time.Time) {
+	dayStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+
+	weekday := int(t.Weekday())
+	if weekday == 0 {
+		weekday = 7 // воскресенье - последний день недели, а не первый
+	}
+	daysSinceMonday := weekday - 1
+
+	start = dayStart.AddDate(0, 0, -daysSinceMonday)
+	end = start.AddDate(0, 0, 7)
+	return start, end
 }

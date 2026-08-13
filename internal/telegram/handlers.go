@@ -28,13 +28,13 @@ var weekdayNames = [...]string{"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "
 func handleStart(ctx context.Context, bot *Bot, msg *tgbotapi.Message) error {
 	text := fmt.Sprintf(
 		"Привет! Я бот для брони игровой комнаты в атриуме 4й секции ЖК Амундсен.\n"+
-			"Комнату можно бронировать с %02d:00 до %02d:00.\n\n"+
+			"Комнату можно бронировать с %02d:00 до %02d:00, не больше %d броней в неделю на человека.\n\n"+
 			"Команды:\n"+
 			"/book - забронировать слот\n"+
 			"/my - мои брони\n"+
 			"/cancel - отменить бронь (в любое время)\n"+
 			"/free - проверить свободное время",
-		booking.BusinessHoursStart, booking.BusinessHoursEnd)
+		booking.BusinessHoursStart, booking.BusinessHoursEnd, booking.MaxBookingsPerWeek)
 	return bot.Send(msg.Chat.ID, text)
 }
 
@@ -107,6 +107,8 @@ func bookingErrorText(err error) string {
 		return fmt.Sprintf("длительность брони должна быть от %s до %s", booking.MinSlotDuration, booking.MaxSlotDuration)
 	case errors.Is(err, booking.ErrOutsideBusinessHours):
 		return fmt.Sprintf("бронировать можно только с %02d:00 до %02d:00", booking.BusinessHoursStart, booking.BusinessHoursEnd)
+	case errors.Is(err, booking.ErrWeeklyLimitReached):
+		return fmt.Sprintf("у вас уже %d брони(-ей) на этой неделе - это максимум", booking.MaxBookingsPerWeek)
 	case errors.Is(err, booking.ErrSlotTaken):
 		return "это время уже занято, проверьте /free"
 	default:
